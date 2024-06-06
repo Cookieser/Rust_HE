@@ -1,3 +1,4 @@
+//核心测试部分代码，
 use criterion::{criterion_group, criterion_main, Criterion};
 
 use game::play_game;

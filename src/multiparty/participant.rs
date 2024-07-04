@@ -79,6 +79,11 @@ pub struct CipherToSharesProtocol<'a, Share> {
     share: Option<Share>,
     h_reveal: PolynomialRevelationProtocol<'a>,
 }
+pub struct ElementWiseVectorProductProtocol<'a>{
+    public_key: PublicKeyGenerationProtocol<'a>,
+    //relin_key: RelinKeysGenerationProtocol<'a>,
+    //pubKeySwitch: PublicKeySwitchProtocol<'a>,
+}
 
 fn sample_noise(prng: &mut BlakeRNG, poly_degree: usize, parms: &EncryptionParameters, ntt_tables: &[NTTTables], is_ntt_form: bool, output: &mut [u64]) {
     use crate::util::rlwe;
@@ -490,6 +495,31 @@ impl Participant {
                 parms_id: *cipher.parms_id(),
             },
         }
+
+    }
+
+    pub fn element_wise_vector_product(&mut self) -> ElementWiseVectorProductProtocol {
+        let p0p1 = self.key_generator.create_public_key_with_u_prng(false, &mut self.borrow_common_rng());
+        let broadcasted = vec![None; self.participant_count];
+
+        //let relin_key_protocol = RelinKeysGenerationProtocol::new(self);
+
+
+        ElementWiseVectorProductProtocol{
+            public_key: PublicKeyGenerationProtocol {
+                p1_reveal: PolynomialRevelationProtocol { 
+                    parms_id: *(p0p1.parms_id()), 
+                    participant: self, 
+                    broadcasted, 
+                    result: p0p1.as_ciphertext().poly(0).to_vec(),
+                },
+                result: p0p1,
+            }
+            //relin_key:relin_key_protocol,
+
+        }
+
+
 
     }
 
@@ -973,6 +1003,54 @@ impl<'a, Share> CipherToSharesProtocol<'a, Share> {
 
 }
 
+impl<'a> ElementWiseVectorProductProtocol<'a>{
+
+
+    // generate public key
+    pub fn receive_publickey_gen_step<T: Read>(&mut self, sender_id: usize, stream: &mut T) -> std::io::Result<()> {
+        self.public_key.receive(sender_id, stream)
+    }
+
+
+    pub fn send_publickey_gen_step<T: Write>(&self, stream: &mut T) -> std::io::Result<()> {
+        self.public_key.send(stream)
+    }
+
+    pub fn finish_publickey_gen_step(self) -> PublicKey {
+        self.public_key.finish()
+
+    }
+    /*
+  
+    // RelinKeys
+    pub fn receive_relinkeys_step1<T: Read>(&mut self, sender_id: usize, stream: &mut T) -> std::io::Result<()> {
+        self.relin_key.receive_step1(sender_id,stream)
+        
+    }
+    pub fn send_relinkeys_step1<T: Write>(&self, stream: &mut T) -> std::io::Result<()> {
+        self.relin_key.send_step1(stream)
+        
+    }
+    pub fn relinkeys_step2(&mut self) {
+        self.relin_key.step2()
+
+    }
+
+    pub fn receive_relinkeys_step2<T: Read>(&mut self, sender_id: usize, stream: &mut T) -> std::io::Result<()> {
+        self.relin_key.receive_step2(sender_id,stream)
+    }
+
+    pub fn send_relinkeys_step2<T: Write>(&self, stream: &mut T) -> std::io::Result<()> {
+        self.relin_key.send_step2(stream)
+    }
+
+    pub fn finish_relinkeys_step(mut self) -> RelinKeys {
+        self.relin_key.finish()
+    }
+    */
+    
+
+}
 
 #[cfg(test)]
 mod tests {
@@ -1371,4 +1449,115 @@ mod tests {
 
     }
 
+#[test]
+    pub fn test_element_wise_vector_product(){
+        use crate::create_bfv_decryptor_suite;
+
+        let (_params, context, _encoder, _keygen, _encryptor, _decryptor)
+            = create_bfv_decryptor_suite(8192, 25, vec![60, 40, 60]);
+
+        let prng_seed = PRNGSeed([1; 64]);
+        let mut p0 = Participant::new(3, 0, context.clone(), BlakeRNG::from_seed(prng_seed));
+        let mut p1 = Participant::new(3, 1, context.clone(), BlakeRNG::from_seed(prng_seed));
+        let mut p2 = Participant::new(3, 2, context.clone(), BlakeRNG::from_seed(prng_seed));
+      
+
+        
+        let mut protocol0 = p0.element_wise_vector_product();
+        let mut protocol1 = p1.element_wise_vector_product();
+        let mut protocol2 = p2.element_wise_vector_product();
+
+        let mut msg0 = Vec::new();
+        let mut msg1 = Vec::new();
+        let mut msg2 = Vec::new();
+
+
+        protocol0.send_publickey_gen_step(&mut msg0).unwrap();
+        protocol1.send_publickey_gen_step(&mut msg1).unwrap();
+        protocol2.send_publickey_gen_step(&mut msg2).unwrap();
+
+
+        protocol0.receive_publickey_gen_step(1, &mut msg1.as_slice()).unwrap();
+        protocol0.receive_publickey_gen_step(2, &mut msg2.as_slice()).unwrap();
+
+        protocol1.receive_publickey_gen_step(0, &mut msg0.as_slice()).unwrap();
+        protocol1.receive_publickey_gen_step(2, &mut msg2.as_slice()).unwrap();
+
+        protocol2.receive_publickey_gen_step(0, &mut msg0.as_slice()).unwrap();
+        protocol2.receive_publickey_gen_step(1, &mut msg1.as_slice()).unwrap();
+
+
+        let pk0 = protocol0.finish_publickey_gen_step();
+        let pk1 = protocol1.finish_publickey_gen_step();
+        let pk2 = protocol2.finish_publickey_gen_step();
+
+        assert_eq!(pk0.data(), pk1.data());
+        assert_eq!(pk1.data(), pk2.data());
+
+/*
+        // generate relin key
+
+        let mut msg0 = Vec::new();
+        let mut msg1 = Vec::new();
+        let mut msg2 = Vec::new();
+        protocol0.send_relinkeys_step1(&mut msg0).unwrap();
+        protocol1.send_relinkeys_step1(&mut msg1).unwrap();
+        protocol2.send_relinkeys_step1(&mut msg2).unwrap();
+
+        protocol0.receive_relinkeys_step1(1, &mut msg1.as_slice()).unwrap();
+        protocol0.receive_relinkeys_step1(2, &mut msg2.as_slice()).unwrap();
+
+
+        protocol1.receive_relinkeys_step1(2, &mut msg2.as_slice()).unwrap();
+        protocol1.receive_relinkeys_step1(0, &mut msg0.as_slice()).unwrap();
+
+        protocol2.receive_relinkeys_step1(1, &mut msg1.as_slice()).unwrap();
+        protocol2.receive_relinkeys_step1(0, &mut msg0.as_slice()).unwrap();
+
+        protocol0.relinkeys_step2();
+        protocol1.relinkeys_step2();
+        protocol2.relinkeys_step2();
+
+        let mut msg0 = Vec::new();
+        let mut msg1 = Vec::new();
+        let mut msg2 = Vec::new();
+
+        protocol0.send_relinkeys_step2(&mut msg0).unwrap();
+        protocol1.send_relinkeys_step2(&mut msg1).unwrap();
+        protocol2.send_step2(&mut msg2).unwrap();
+
+
+        protocol0.receive_step2(1, &mut msg1.as_slice()).unwrap();
+        protocol0.receive_step2(2, &mut msg2.as_slice()).unwrap();
+
+
+        protocol1.receive_step2(2, &mut msg2.as_slice()).unwrap();
+        protocol1.receive_step2(0, &mut msg0.as_slice()).unwrap();
+
+        protocol2.receive_step2(1, &mut msg1.as_slice()).unwrap();
+        protocol2.receive_step2(0, &mut msg0.as_slice()).unwrap();
+
+
+        let rlk0 = protocol0.finish();
+        let rlk1 = protocol1.finish();
+        let rlk2 = protocol2.finish();
+
+        // check that both participants have the same relin key
+        let iter0 = rlk0.as_kswitch_keys().data()[0].iter();
+        let iter1 = rlk1.as_kswitch_keys().data()[0].iter();
+        
+        for (rlk0i, rlk1i) in iter0.zip(iter1) {
+            assert_eq!(rlk0i.data(), rlk1i.data());
+        }
+        let iter1 = rlk1.as_kswitch_keys().data()[0].iter();
+        let iter2 = rlk2.as_kswitch_keys().data()[0].iter();
+        for (rlk2i, rlk1i) in iter2.zip(iter1) {
+            assert_eq!(rlk2i.data(), rlk1i.data());
+        }
+
+*/
+
+
+
+    }
 }

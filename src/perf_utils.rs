@@ -1,11 +1,10 @@
 //! Provide performance testing utilities.
-
+#![allow(missing_docs)]
 
 const PROMPT_LENGTH: usize = 15;
 
 /// Format and print communication. The `name` is a string put before the colon. The `tabs * 2` are how many spaces to put before prompt.
 /// If `div > 1`, will print an "average comm" and a "total comm".
-#[allow(dead_code)]
 pub fn print_communication(name: &str, tabs: usize, bytes: usize, div: usize) {
     // print spaces = tabs * 2
     for _ in 0..tabs {
@@ -93,7 +92,6 @@ pub fn print_time(prompt: &str, tabs: usize, total_time: std::time::Duration, di
 /// The interval is accumulated between the pair of calls. Finally, the user could use [`Timer::print`]
 /// or [`Timer::print_div`] to print the accumulated time or averaged time.
 /// The user could use [`Timer::clear`] to clear all timers.
-#[allow(dead_code)]
 pub struct Timer {
     start: Vec<std::time::Instant>,
     accumulated: Vec<std::time::Duration>,
@@ -168,7 +166,6 @@ impl Timer {
 /// 
 /// This is similar to [`Timer`] because you could call [`TimerSingle::tick`] and [`TimerSingle::tock`] multiple times.
 /// But it tracks only one timer. The name of the timer is only needed when printing.
-#[allow(dead_code)]
 pub struct TimerSingle {
     start: std::time::Instant,
     accumulated: std::time::Duration,
@@ -180,7 +177,6 @@ impl Default for TimerSingle {
         Self::new()
     }
 }
-#[allow(dead_code)]
 
 impl TimerSingle {
     /// Create a new timer.
@@ -230,19 +226,16 @@ impl TimerSingle {
 /// A utility struct that allows measuing a time interval.
 /// 
 /// User simply creates a new [`TimerOnce`] and calls [`TimerOnce::finish`] (or [`TimerOnce::finish_div`]) to print the time interval or averaged time interval
-#[allow(dead_code)]
 pub struct TimerOnce {
     start: std::time::Instant,
     tabs: usize,
 }
-#[allow(dead_code)]
-
 impl Default for TimerOnce {
     fn default() -> Self {
         Self::new()
     }
 }
-#[allow(dead_code)]
+
 impl TimerOnce {
     /// Create a new timer.
     pub fn new() -> Self {

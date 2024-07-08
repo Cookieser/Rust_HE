@@ -79,10 +79,9 @@ pub struct CipherToSharesProtocol<'a, Share> {
     share: Option<Share>,
     h_reveal: PolynomialRevelationProtocol<'a>,
 }
-pub struct ElementWiseVectorProductProtocol<'a>{
-    public_key: PublicKeyGenerationProtocol<'a>,
-    //relin_key: RelinKeysGenerationProtocol<'a>,
-    //pubKeySwitch: PublicKeySwitchProtocol<'a>,
+pub struct ElementWiseVectorProductProtocol{
+    //participant: &'a Participant,
+    cipher: Ciphertext,
 }
 
 fn sample_noise(prng: &mut BlakeRNG, poly_degree: usize, parms: &EncryptionParameters, ntt_tables: &[NTTTables], is_ntt_form: bool, output: &mut [u64]) {
@@ -498,27 +497,22 @@ impl Participant {
 
     }
 
-    pub fn element_wise_vector_product(&mut self) -> ElementWiseVectorProductProtocol {
-        let p0p1 = self.key_generator.create_public_key_with_u_prng(false, &mut self.borrow_common_rng());
-        let broadcasted = vec![None; self.participant_count];
+    pub fn element_wise_vector_product(&mut self,pk: PublicKey,xi: &[u64],) -> ElementWiseVectorProductProtocol {
+        use crate::{Encryptor};
+        use crate::create_bfv_decryptor_suite;
 
-        //let relin_key_protocol = RelinKeysGenerationProtocol::new(self);
+        let (_params, context, encoder, _keygen, _encryptor, _decryptor)
+        = create_bfv_decryptor_suite(8192, 25, vec![60, 60, 60]);
 
 
+        let encryptor = Encryptor::new(context.clone()).set_public_key(pk);
+    
+        let plain_xi = encoder.encode_new(&xi);
+        let encs_xi= encryptor.encrypt_new(&plain_xi);
         ElementWiseVectorProductProtocol{
-            public_key: PublicKeyGenerationProtocol {
-                p1_reveal: PolynomialRevelationProtocol { 
-                    parms_id: *(p0p1.parms_id()), 
-                    participant: self, 
-                    broadcasted, 
-                    result: p0p1.as_ciphertext().poly(0).to_vec(),
-                },
-                result: p0p1,
-            }
-            //relin_key:relin_key_protocol,
-
+            //participant: self, 
+            cipher: encs_xi,
         }
-
 
 
     }
@@ -1003,53 +997,35 @@ impl<'a, Share> CipherToSharesProtocol<'a, Share> {
 
 }
 
-impl<'a> ElementWiseVectorProductProtocol<'a>{
+impl<'a> ElementWiseVectorProductProtocol{
 
 
-    // generate public key
-    pub fn receive_publickey_gen_step<T: Read>(&mut self, sender_id: usize, stream: &mut T) -> std::io::Result<()> {
-        self.public_key.receive(sender_id, stream)
-    }
+    pub fn step2(&self,encs_x0: Ciphertext,encs_x1: Ciphertext,encs_x2: Ciphertext,rlk0:RelinKeys)->Ciphertext{
+
+       use crate::create_bfv_decryptor_suite;
+       let (_params, context, _encoder, _keygen, _encryptor, _decryptor)
+           = create_bfv_decryptor_suite(8192, 25, vec![60, 60, 60]);
+       let evaluator = Evaluator::new(context.clone());
 
 
-    pub fn send_publickey_gen_step<T: Write>(&self, stream: &mut T) -> std::io::Result<()> {
-        self.public_key.send(stream)
-    }
+       let mul = evaluator.multiply_new(&encs_x0, &encs_x1);
+       let encs_y = evaluator.relinearize_new(&mul, &rlk0);
+       let mul = evaluator.multiply_new(&encs_y, &encs_x2);
+       let encs_y = evaluator.relinearize_new(&mul, &rlk0);
+       encs_y
+  }
+  /*
+    pub fn send(&mut self, cipher: Ciphertext) -> std::io::Result<()> {
+        let cipher_bytes = serialize(&cipher, &&self.participant.context);
+        Ok(())
 
-    pub fn finish_publickey_gen_step(self) -> PublicKey {
-        self.public_key.finish()
 
-    }
-    /*
-  
-    // RelinKeys
-    pub fn receive_relinkeys_step1<T: Read>(&mut self, sender_id: usize, stream: &mut T) -> std::io::Result<()> {
-        self.relin_key.receive_step1(sender_id,stream)
-        
-    }
-    pub fn send_relinkeys_step1<T: Write>(&self, stream: &mut T) -> std::io::Result<()> {
-        self.relin_key.send_step1(stream)
-        
-    }
-    pub fn relinkeys_step2(&mut self) {
-        self.relin_key.step2()
-
-    }
-
-    pub fn receive_relinkeys_step2<T: Read>(&mut self, sender_id: usize, stream: &mut T) -> std::io::Result<()> {
-        self.relin_key.receive_step2(sender_id,stream)
-    }
-
-    pub fn send_relinkeys_step2<T: Write>(&self, stream: &mut T) -> std::io::Result<()> {
-        self.relin_key.send_step2(stream)
-    }
-
-    pub fn finish_relinkeys_step(mut self) -> RelinKeys {
-        self.relin_key.finish()
-    }
-    */
-    
-
+}
+    pub fn receive<T: Write>(&self, stream: &mut T) -> std::io::Result<()> {
+        let deserialized = deserialize::<Ciphertext>(&cipher_bytes, &bob_context);
+        self.c_reveal.send(stream)
+}
+*/
 }
 
 #[cfg(test)]
@@ -1453,8 +1429,8 @@ mod tests {
     pub fn test_element_wise_vector_product(){
         use crate::create_bfv_decryptor_suite;
 
-        let (_params, context, _encoder, _keygen, _encryptor, _decryptor)
-            = create_bfv_decryptor_suite(8192, 25, vec![60, 40, 60]);
+        let (_params, context, encoder, _keygen, _encryptor, _decryptor)
+            = create_bfv_decryptor_suite(8192, 25, vec![60, 60, 60]);
 
         let prng_seed = PRNGSeed([1; 64]);
         let mut p0 = Participant::new(3, 0, context.clone(), BlakeRNG::from_seed(prng_seed));
@@ -1462,68 +1438,102 @@ mod tests {
         let mut p2 = Participant::new(3, 2, context.clone(), BlakeRNG::from_seed(prng_seed));
       
 
-        
-        let mut protocol0 = p0.element_wise_vector_product();
-        let mut protocol1 = p1.element_wise_vector_product();
-        let mut protocol2 = p2.element_wise_vector_product();
+
+        // generate public key
+        let mut protocol0 = p0.generate_public_key();
+        let mut protocol1 = p1.generate_public_key();
+        let mut protocol2 = p2.generate_public_key();
 
         let mut msg0 = Vec::new();
         let mut msg1 = Vec::new();
         let mut msg2 = Vec::new();
 
+        protocol0.send(&mut msg0).unwrap();
+        protocol1.send(&mut msg1).unwrap();
+        protocol2.send(&mut msg2).unwrap();
 
-        protocol0.send_publickey_gen_step(&mut msg0).unwrap();
-        protocol1.send_publickey_gen_step(&mut msg1).unwrap();
-        protocol2.send_publickey_gen_step(&mut msg2).unwrap();
+        protocol0.receive(1, &mut msg1.as_slice()).unwrap();
+        protocol0.receive(2, &mut msg2.as_slice()).unwrap();
 
+        protocol1.receive(0, &mut msg0.as_slice()).unwrap();
+        protocol1.receive(2, &mut msg2.as_slice()).unwrap();
 
-        protocol0.receive_publickey_gen_step(1, &mut msg1.as_slice()).unwrap();
-        protocol0.receive_publickey_gen_step(2, &mut msg2.as_slice()).unwrap();
+        protocol2.receive(0, &mut msg0.as_slice()).unwrap();
+        protocol2.receive(1, &mut msg1.as_slice()).unwrap();
 
-        protocol1.receive_publickey_gen_step(0, &mut msg0.as_slice()).unwrap();
-        protocol1.receive_publickey_gen_step(2, &mut msg2.as_slice()).unwrap();
+        let pk0 = protocol0.finish();
+        let pk1 = protocol1.finish();
+        let pk2 = protocol2.finish();
 
-        protocol2.receive_publickey_gen_step(0, &mut msg0.as_slice()).unwrap();
-        protocol2.receive_publickey_gen_step(1, &mut msg1.as_slice()).unwrap();
-
-
-        let pk0 = protocol0.finish_publickey_gen_step();
-        let pk1 = protocol1.finish_publickey_gen_step();
-        let pk2 = protocol2.finish_publickey_gen_step();
 
         assert_eq!(pk0.data(), pk1.data());
         assert_eq!(pk1.data(), pk2.data());
 
-/*
+
+
+        // reconstruct secret key
+        let mut protocol0 = p0.reveal_secret_key();
+        let mut protocol1 = p1.reveal_secret_key();
+        let mut protocol2 = p2.reveal_secret_key();
+
+        let mut msg0 = Vec::new();
+        let mut msg1 = Vec::new();
+        let mut msg2 = Vec::new();
+
+        protocol0.send(&mut msg0).unwrap();
+        protocol1.send(&mut msg1).unwrap();
+        protocol2.send(&mut msg2).unwrap();
+
+        protocol0.receive(1, &mut msg1.as_slice()).unwrap();
+        protocol0.receive(2, &mut msg2.as_slice()).unwrap();
+
+        protocol1.receive(0, &mut msg0.as_slice()).unwrap();
+        protocol1.receive(2, &mut msg2.as_slice()).unwrap();
+
+        protocol2.receive(1, &mut msg1.as_slice()).unwrap();
+        protocol2.receive(0, &mut msg0.as_slice()).unwrap();
+
+        let sk0 = protocol0.finish();
+        let sk1 = protocol1.finish();
+        let sk2 = protocol2.finish();
+        assert_eq!(sk0.data(), sk1.data());
+        assert_eq!(sk2.data(), sk1.data());
+
+
+        
+
         // generate relin key
+        let mut protocol0 = p0.generate_relin_keys();
+        let mut protocol1 = p1.generate_relin_keys();
+        let mut protocol2 = p2.generate_relin_keys();
 
         let mut msg0 = Vec::new();
         let mut msg1 = Vec::new();
         let mut msg2 = Vec::new();
-        protocol0.send_relinkeys_step1(&mut msg0).unwrap();
-        protocol1.send_relinkeys_step1(&mut msg1).unwrap();
-        protocol2.send_relinkeys_step1(&mut msg2).unwrap();
+        protocol0.send_step1(&mut msg0).unwrap();
+        protocol1.send_step1(&mut msg1).unwrap();
+        protocol2.send_step1(&mut msg2).unwrap();
 
-        protocol0.receive_relinkeys_step1(1, &mut msg1.as_slice()).unwrap();
-        protocol0.receive_relinkeys_step1(2, &mut msg2.as_slice()).unwrap();
+        protocol0.receive_step1(1, &mut msg1.as_slice()).unwrap();
+        protocol0.receive_step1(2, &mut msg2.as_slice()).unwrap();
 
 
-        protocol1.receive_relinkeys_step1(2, &mut msg2.as_slice()).unwrap();
-        protocol1.receive_relinkeys_step1(0, &mut msg0.as_slice()).unwrap();
+        protocol1.receive_step1(2, &mut msg2.as_slice()).unwrap();
+        protocol1.receive_step1(0, &mut msg0.as_slice()).unwrap();
 
-        protocol2.receive_relinkeys_step1(1, &mut msg1.as_slice()).unwrap();
-        protocol2.receive_relinkeys_step1(0, &mut msg0.as_slice()).unwrap();
+        protocol2.receive_step1(1, &mut msg1.as_slice()).unwrap();
+        protocol2.receive_step1(0, &mut msg0.as_slice()).unwrap();
 
-        protocol0.relinkeys_step2();
-        protocol1.relinkeys_step2();
-        protocol2.relinkeys_step2();
+        protocol0.step2();
+        protocol1.step2();
+        protocol2.step2();
 
         let mut msg0 = Vec::new();
         let mut msg1 = Vec::new();
         let mut msg2 = Vec::new();
 
-        protocol0.send_relinkeys_step2(&mut msg0).unwrap();
-        protocol1.send_relinkeys_step2(&mut msg1).unwrap();
+        protocol0.send_step2(&mut msg0).unwrap();
+        protocol1.send_step2(&mut msg1).unwrap();
         protocol2.send_step2(&mut msg2).unwrap();
 
 
@@ -1555,7 +1565,55 @@ mod tests {
             assert_eq!(rlk2i.data(), rlk1i.data());
         }
 
-*/
+    
+///////////////////////////////////////////////////////////////////////
+        let x0 = vec![2, 4];
+        let x1 = vec![1, 3];
+        let x2 = vec![3, 6];
+
+
+        let protocol0 = p0.element_wise_vector_product(pk0,&x0);
+        let protocol1 = p1.element_wise_vector_product(pk1,&x1);
+        let protocol2 = p2.element_wise_vector_product(pk2,&x2);
+
+
+        let encs_x0 = protocol0.cipher.clone();
+        let encs_x1 = protocol1.cipher.clone();
+        let encs_x2 = protocol2.cipher.clone();
+        
+        
+
+
+
+       // let cipher_bytes = serialize(&cipher, &&self.participant.context);
+
+
+
+        //protocol1.send_step1(&mut msg1).unwrap();
+        //protocol2.send_step1(&mut msg2).unwrap();
+        //protocol0.receive_step1(1, &mut msg1.as_slice()).unwrap();
+        //protocol0.receive_step1(2, &mut msg2.as_slice()).unwrap();
+
+        let res = protocol0.step2(encs_x0, encs_x1, encs_x2, rlk0);
+
+        //protocol0.send_step2();
+        //protocol0.send_step2();
+
+        //protocol1.receive_step2().unwrap();
+        //protocol2.receive_step2().unwrap();
+
+
+        //protocol1.finsh().unwrap();
+        //protocol2.finsh().unwrap();
+
+
+
+        let decryptor = Decryptor::new(context.clone(), sk0);
+        let deciphered = decryptor.decrypt_new(&res);
+        let res = encoder.decode_new(&deciphered);
+        assert_eq!(&[6,72], &res[..2]);
+
+        //
 
 
 

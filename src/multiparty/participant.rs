@@ -1037,7 +1037,39 @@ impl<'a> ElementWiseVectorProductProtocol<'a>{
         self.broadcasted_cipher[sender_id] = deserialized;
         Ok(())
     }
-}
+
+
+    pub fn step3(&self,rlk:RelinKeys)->Ciphertext{
+
+        
+        use crate::create_bfv_decryptor_suite;
+        let (_params, context, _encoder, _keygen, _encryptor, _decryptor)
+            = create_bfv_decryptor_suite(8192, 25, vec![60, 60, 60]);
+        let evaluator = Evaluator::new(context.clone());
+
+
+        for i in 1..self.participant.participant_id {
+            assert_eq!(self.broadcasted_cipher[i].data().is_empty(), true);
+        }
+
+        let mut result = self.broadcasted_cipher[1].clone();
+
+        for cipher in self.broadcasted_cipher.iter().skip(2) {
+            result = evaluator.multiply_new(&result, &cipher);
+            result = evaluator.relinearize_new(&result, &rlk);
+        }
+
+        
+        result
+    }
+        
+
+     }
+
+
+
+
+
 
 #[cfg(test)]
 mod tests {
@@ -1590,69 +1622,21 @@ mod tests {
 
         let mut msg1 = Vec::new();
         let mut msg2 = Vec::new();
-        let encs_x0 = protocol0.cipher.clone();
-        let encs_x1 = protocol1.cipher.clone();
 
-        protocol1.send_step2(encs_x0,&mut msg1).unwrap();
-        protocol2.send_step2(encs_x1,&mut msg2).unwrap();
+        let encs_x1 = protocol1.cipher.clone();
+        let encs_x2 = protocol2.cipher.clone();
+
+        protocol1.send_step2(encs_x1,&mut msg1).unwrap();
+        protocol2.send_step2(encs_x2,&mut msg2).unwrap();
         protocol0.receive_step2(1,&mut msg1.as_slice()).unwrap();
         protocol0.receive_step2(2,&mut msg2.as_slice()).unwrap();
 
-
-
-
-        /*
-        let e = protocol0.broadcasted_cipher[1].clone();
+        let e = protocol0.step3(rlk0);
+        
         let decryptor = Decryptor::new(context.clone(), sk0.clone());
         let deciphered = decryptor.decrypt_new(&e);
         let res = encoder.decode_new(&deciphered);
-        assert_eq!(&[2,4], &res[..2]);
-
+        assert_eq!(&[3,18], &res[..2]);
         
-        
-        let encs_x1 = protocol1.cipher.clone();
-        let encs_x2 = protocol2.cipher.clone();
-        
-        
-
-
-        let cipher_bytes = serialize(&encs_x0, &protocol0.participant.context);
-        let deserialized = deserialize::<Ciphertext>(&cipher_bytes, &protocol0.participant.context);
-        let decryptor = Decryptor::new(context.clone(), sk0.clone());
-        let deciphered = decryptor.decrypt_new(&deserialized);
-        let res = encoder.decode_new(&deciphered);
-        assert_eq!(&[2,4], &res[..2]);
-    
-
-
-
-        //protocol1.send_step1(&mut msg1).unwrap();
-        //protocol2.send_step1(&mut msg2).unwrap();
-        //protocol0.receive_step1(1, &mut msg1.as_slice()).unwrap();
-        //protocol0.receive_step1(2, &mut msg2.as_slice()).unwrap();
-
-        let res = protocol0.step2(encs_x0, encs_x1, encs_x2, rlk0);
-
-        //protocol0.send_step2();
-        //protocol0.send_step2();
-
-        //protocol1.receive_step2().unwrap();
-        //protocol2.receive_step2().unwrap();
-
-
-        //protocol1.finsh().unwrap();
-        //protocol2.finsh().unwrap();
-
-
-    
-        let decryptor = Decryptor::new(context.clone(), sk0);
-        let deciphered = decryptor.decrypt_new(&res);
-        let res = encoder.decode_new(&deciphered);
-        assert_eq!(&[6,72], &res[..2]);
-
-        //
-
-*/
-
     }
 }

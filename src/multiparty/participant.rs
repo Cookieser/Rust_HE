@@ -83,6 +83,8 @@ pub struct ElementWiseVectorProductProtocol<'a>{
     cipher: Ciphertext,
     participant: &'a Participant,
     broadcasted_cipher: Vec<Ciphertext>,
+    eval_res:Ciphertext,
+    //pubkey_switch:PublicKeySwitchProtocol<'a>
 }
 
 fn sample_noise(prng: &mut BlakeRNG, poly_degree: usize, parms: &EncryptionParameters, ntt_tables: &[NTTTables], is_ntt_form: bool, output: &mut [u64]) {
@@ -522,6 +524,7 @@ impl Participant {
             cipher:encs_xi,
             participant: self, 
             broadcasted_cipher: vec![Ciphertext::default(); self.participant_count],
+            eval_res:Ciphertext::default(),
         }
 
 
@@ -1010,7 +1013,7 @@ impl<'a, Share> CipherToSharesProtocol<'a, Share> {
 impl<'a> ElementWiseVectorProductProtocol<'a>{
 
 
-    pub fn step2(&self,encs_x0: Ciphertext,encs_x1: Ciphertext,encs_x2: Ciphertext,rlk0:RelinKeys)->Ciphertext{
+    pub fn step2(&mut self,encs_x0: Ciphertext,encs_x1: Ciphertext,encs_x2: Ciphertext,rlk0:RelinKeys)->Ciphertext{
 
        use crate::create_bfv_decryptor_suite;
        let (_params, context, _encoder, _keygen, _encryptor, _decryptor)
@@ -1022,11 +1025,13 @@ impl<'a> ElementWiseVectorProductProtocol<'a>{
        let encs_y = evaluator.relinearize_new(&mul, &rlk0);
        let mul = evaluator.multiply_new(&encs_y, &encs_x2);
        let encs_y = evaluator.relinearize_new(&mul, &rlk0);
+       self.eval_res = encs_y.clone();
        encs_y
     }
 
 
-    pub fn send_step2<T: Write>(&self, cipher: Ciphertext, stream: &mut T) -> std::io::Result<()> {
+    pub fn send_step2<T: Write>(&self, stream: &mut T) -> std::io::Result<()> {
+        let cipher = self.cipher.clone();
         serialize(&cipher, &self.participant.context,stream);
         Ok(())
     }
@@ -1039,7 +1044,7 @@ impl<'a> ElementWiseVectorProductProtocol<'a>{
     }
 
 
-    pub fn step3(&self,rlk:RelinKeys)->Ciphertext{
+    pub fn step3(&mut self,rlk:RelinKeys)->Ciphertext{
 
         
         use crate::create_bfv_decryptor_suite;
@@ -1059,12 +1064,25 @@ impl<'a> ElementWiseVectorProductProtocol<'a>{
             result = evaluator.relinearize_new(&result, &rlk);
         }
 
-        
+        self.eval_res = result.clone();
         result
     }
-        
+    pub fn send_step3<T: Write>(&self, stream: &mut T) -> std::io::Result<()> {
+        let cipher = self.eval_res.clone();
+        serialize(&cipher, &self.participant.context,stream);
+        Ok(())
+    }  
+    pub fn receive_step3(&mut self, stream: &[u8]) -> std::io::Result<()> {
+        let mut stream = stream;
+        let deserialized = Ciphertext::deserialize(&self.participant.context, &mut stream).unwrap();
+        self.eval_res = deserialized;
+        Ok(())
+    }
 
-     }
+
+
+
+ }
 
 
 
@@ -1616,27 +1634,74 @@ mod tests {
 
 
         let mut protocol0 = p0.element_wise_vector_product(pk0,&x0);
-        let protocol1 = p1.element_wise_vector_product(pk1,&x1);
+        let mut protocol1 = p1.element_wise_vector_product(pk1,&x1);
         let protocol2 = p2.element_wise_vector_product(pk2,&x2);
 
 
         let mut msg1 = Vec::new();
         let mut msg2 = Vec::new();
-
-        let encs_x1 = protocol1.cipher.clone();
-        let encs_x2 = protocol2.cipher.clone();
-
-        protocol1.send_step2(encs_x1,&mut msg1).unwrap();
-        protocol2.send_step2(encs_x2,&mut msg2).unwrap();
+        protocol1.send_step2(&mut msg1).unwrap();
+        protocol2.send_step2(&mut msg2).unwrap();
         protocol0.receive_step2(1,&mut msg1.as_slice()).unwrap();
         protocol0.receive_step2(2,&mut msg2.as_slice()).unwrap();
 
-        let e = protocol0.step3(rlk0);
+
         
+      
+        protocol0.step3(rlk0);
+
+        let mut msg1 = Vec::new();
+        protocol0.send_step3(&mut msg1).unwrap();
+        protocol1.receive_step3(&mut msg1.as_slice()).unwrap();
+        
+        
+        
+        let encs_y = protocol0.eval_res.clone();
+        
+            // let decryptor = Decryptor::new(context.clone(), sk1.clone());
+            // let deciphered = decryptor.decrypt_new(&e);
+            // let res = encoder.decode_new(&deciphered);
+            // assert_eq!(&[3,18], &res[..2]);
+
+
+
+
+
+
+        let keygen_prime = KeyGenerator::new(context.clone());
+        let pk_r = keygen_prime.create_public_key(false);
+
+
+
+        let mut protocol0 = p0.public_key_switch(&encs_y, &pk_r);
+        let protocol1 = p1.public_key_switch(&encs_y, &pk_r);
+        let protocol2 = p2.public_key_switch(&encs_y, &pk_r);
+        let mut msg1 = Vec::new();
+        let mut msg2 = Vec::new();
+
+        protocol1.send(&mut msg1).unwrap();
+        protocol2.send(&mut msg2).unwrap();
+
+        protocol0.receive(1, &mut msg1.as_slice()).unwrap();
+        protocol0.receive(2, &mut msg2.as_slice()).unwrap();
+
+        let cipher_prime = protocol0.finish();
+
+       
+        let decryptor = Decryptor::new(context.clone(), keygen_prime.secret_key().clone());
+        let deciphered = decryptor.decrypt_new(&cipher_prime);
+        let deciphered = encoder.decode_new(&deciphered);
+        assert_eq!([3,18], deciphered[..2]);
+
+
+
+
+
+        /*
         let decryptor = Decryptor::new(context.clone(), sk0.clone());
         let deciphered = decryptor.decrypt_new(&e);
         let res = encoder.decode_new(&deciphered);
         assert_eq!(&[3,18], &res[..2]);
-        
+        */
     }
 }

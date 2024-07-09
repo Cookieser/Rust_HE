@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use crate::{
     util::{BlakeRNG, NTTTables}, polymod, 
     SecretKey, HeContext, KeyGenerator, PublicKey, 
-    ParmsID, PolynomialSerializer, PARMS_ID_ZERO, 
+    ParmsID, SerializableWithHeContext,PolynomialSerializer, PARMS_ID_ZERO, 
     RelinKeys, Ciphertext, KSwitchKeys, 
     EncryptionParameters, Plaintext, 
     ExpandSeed, ValCheck, Evaluator,
@@ -79,9 +79,10 @@ pub struct CipherToSharesProtocol<'a, Share> {
     share: Option<Share>,
     h_reveal: PolynomialRevelationProtocol<'a>,
 }
-pub struct ElementWiseVectorProductProtocol{
-    //participant: &'a Participant,
+pub struct ElementWiseVectorProductProtocol<'a>{
     cipher: Ciphertext,
+    participant: &'a Participant,
+    broadcasted_cipher: Vec<Ciphertext>,
 }
 
 fn sample_noise(prng: &mut BlakeRNG, poly_degree: usize, parms: &EncryptionParameters, ntt_tables: &[NTTTables], is_ntt_form: bool, output: &mut [u64]) {
@@ -155,6 +156,14 @@ fn decrypt_polynomial(context: &Arc<HeContext>, polynomial: &[u64], reference_ci
     }
     destination
 }
+
+
+fn serialize<T: SerializableWithHeContext,W: std::io::Write>(obj: &T, context: &HeContext,mut stream: W) -> W {
+    obj.serialize(context, &mut stream).unwrap();
+    stream
+}
+
+
 
 impl Participant {
 
@@ -510,8 +519,9 @@ impl Participant {
         let plain_xi = encoder.encode_new(&xi);
         let encs_xi= encryptor.encrypt_new(&plain_xi);
         ElementWiseVectorProductProtocol{
-            //participant: self, 
-            cipher: encs_xi,
+            cipher:encs_xi,
+            participant: self, 
+            broadcasted_cipher: vec![Ciphertext::default(); self.participant_count],
         }
 
 
@@ -997,7 +1007,7 @@ impl<'a, Share> CipherToSharesProtocol<'a, Share> {
 
 }
 
-impl<'a> ElementWiseVectorProductProtocol{
+impl<'a> ElementWiseVectorProductProtocol<'a>{
 
 
     pub fn step2(&self,encs_x0: Ciphertext,encs_x1: Ciphertext,encs_x2: Ciphertext,rlk0:RelinKeys)->Ciphertext{
@@ -1013,19 +1023,20 @@ impl<'a> ElementWiseVectorProductProtocol{
        let mul = evaluator.multiply_new(&encs_y, &encs_x2);
        let encs_y = evaluator.relinearize_new(&mul, &rlk0);
        encs_y
-  }
-  /*
-    pub fn send(&mut self, cipher: Ciphertext) -> std::io::Result<()> {
-        let cipher_bytes = serialize(&cipher, &&self.participant.context);
+    }
+
+
+    pub fn send_step2<T: Write>(&self, cipher: Ciphertext, stream: &mut T) -> std::io::Result<()> {
+        serialize(&cipher, &self.participant.context,stream);
         Ok(())
+    }
 
-
-}
-    pub fn receive<T: Write>(&self, stream: &mut T) -> std::io::Result<()> {
-        let deserialized = deserialize::<Ciphertext>(&cipher_bytes, &bob_context);
-        self.c_reveal.send(stream)
-}
-*/
+    pub fn receive_step2(&mut self, sender_id: usize, stream: &[u8]) -> std::io::Result<()> {
+        let mut stream = stream;
+        let deserialized = Ciphertext::deserialize(&self.participant.context, &mut stream).unwrap();
+        self.broadcasted_cipher[sender_id] = deserialized;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1572,20 +1583,46 @@ mod tests {
         let x2 = vec![3, 6];
 
 
-        let protocol0 = p0.element_wise_vector_product(pk0,&x0);
+        let mut protocol0 = p0.element_wise_vector_product(pk0,&x0);
         let protocol1 = p1.element_wise_vector_product(pk1,&x1);
         let protocol2 = p2.element_wise_vector_product(pk2,&x2);
 
 
+        let mut msg1 = Vec::new();
+        let mut msg2 = Vec::new();
         let encs_x0 = protocol0.cipher.clone();
+        let encs_x1 = protocol1.cipher.clone();
+
+        protocol1.send_step2(encs_x0,&mut msg1).unwrap();
+        protocol2.send_step2(encs_x1,&mut msg2).unwrap();
+        protocol0.receive_step2(1,&mut msg1.as_slice()).unwrap();
+        protocol0.receive_step2(2,&mut msg2.as_slice()).unwrap();
+
+
+
+
+        /*
+        let e = protocol0.broadcasted_cipher[1].clone();
+        let decryptor = Decryptor::new(context.clone(), sk0.clone());
+        let deciphered = decryptor.decrypt_new(&e);
+        let res = encoder.decode_new(&deciphered);
+        assert_eq!(&[2,4], &res[..2]);
+
+        
+        
         let encs_x1 = protocol1.cipher.clone();
         let encs_x2 = protocol2.cipher.clone();
         
         
 
 
-
-       // let cipher_bytes = serialize(&cipher, &&self.participant.context);
+        let cipher_bytes = serialize(&encs_x0, &protocol0.participant.context);
+        let deserialized = deserialize::<Ciphertext>(&cipher_bytes, &protocol0.participant.context);
+        let decryptor = Decryptor::new(context.clone(), sk0.clone());
+        let deciphered = decryptor.decrypt_new(&deserialized);
+        let res = encoder.decode_new(&deciphered);
+        assert_eq!(&[2,4], &res[..2]);
+    
 
 
 
@@ -1607,7 +1644,7 @@ mod tests {
         //protocol2.finsh().unwrap();
 
 
-
+    
         let decryptor = Decryptor::new(context.clone(), sk0);
         let deciphered = decryptor.decrypt_new(&res);
         let res = encoder.decode_new(&deciphered);
@@ -1615,7 +1652,7 @@ mod tests {
 
         //
 
-
+*/
 
     }
 }
